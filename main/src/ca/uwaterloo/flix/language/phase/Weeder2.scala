@@ -990,7 +990,9 @@ object Weeder2 {
           if (lit == "") {
             Validation.Success(acc)
           } else {
-            val (processed, errors) = Constants.visitChars(lit, loc)
+            // +1 to account for the stripped quote or close curly brace
+            val (processed, errors) = Constants.visitChars(lit, loc, SourcePosition.moveRightBy(loc.sp1, 1))
+
             errors.foreach(sctx.errors.add)
             val cst = Validation.Success(Expr.Cst(Constant.Str(processed), loc))
             mapN(cst) {
@@ -2766,7 +2768,12 @@ object Weeder2 {
     def toRegex(token: Token)(implicit sctx: SharedContext): Expr = {
       val loc = token.mkSourceLocation()
       val text = token.text.stripPrefix("regex\"").stripSuffix("\"")
-      val (processed, errors) = visitChars(text, loc)
+
+      // +6 to account for the leading 'regex"' (6 characters)
+      val startingCharPos = SourcePosition.moveRightBy(loc.sp1, 6)
+
+      val (processed, errors) = visitChars(text, loc, startingCharPos)
+
       errors.foreach(sctx.errors.add)
       try {
         val pattern = JPattern.compile(processed)
@@ -2779,42 +2786,45 @@ object Weeder2 {
       }
     }
 
-    def visitChars(str: String, loc: SourceLocation): (String, List[CompilationMessage]) = {
+    def visitChars(str: String, loc: SourceLocation, charPos: SourcePosition): (String, List[CompilationMessage]) = {
+      // NOTE: Assume no new line character inside the string literal, otherwise,
+      // the character position will be incorrect.
+
       @tailrec
-      def visit(chars: List[Char], acc: List[Char], accErr: List[CompilationMessage]): (String, List[CompilationMessage]) = {
+      def visit(chars: List[Char], acc: List[Char], accErr: List[CompilationMessage], charPos: SourcePosition): (String, List[CompilationMessage]) = {
         chars match {
           // Case 1: End of the sequence
           case Nil => (acc.reverse.mkString, accErr)
           // Case 2: Escaped character literal
           case esc :: c0 :: rest if esc == '\\' =>
             c0 match {
-              case 'n' => visit(rest, '\n' :: acc, accErr)
-              case 'r' => visit(rest, '\r' :: acc, accErr)
-              case '\\' => visit(rest, '\\' :: acc, accErr)
-              case '\"' => visit(rest, '\"' :: acc, accErr)
-              case '\'' => visit(rest, '\'' :: acc, accErr)
-              case 't' => visit(rest, '\t' :: acc, accErr)
+              case 'n' => visit(rest, '\n' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
+              case 'r' => visit(rest, '\r' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
+              case '\\' => visit(rest, '\\' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
+              case '\"' => visit(rest, '\"' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
+              case '\'' => visit(rest, '\'' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
+              case 't' => visit(rest, '\t' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
               // Special flix escapes for string interpolations
-              case '$' => visit(rest, '$' :: acc, accErr)
-              case '%' => visit(rest, '%' :: acc, accErr)
+              case '$' => visit(rest, '$' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
+              case '%' => visit(rest, '%' :: acc, accErr, SourcePosition.moveRightBy(charPos, 2))
               // Case unicode escape "\u1234".
               case 'u' => rest match {
                 case d1 :: d2 :: d3 :: d4 :: rest2 =>
                   // Doing manual flatMap here to keep recursive call in tail-position
                   visitHex(d1, d2, d3, d4) match {
-                    case Result.Ok(c) => visit(rest2, c :: acc, accErr)
-                    case Result.Err(error) => visit(rest2, d1 :: d2 :: d3 :: d4 :: acc, error :: accErr)
+                    case Result.Ok(c) => visit(rest2, c :: acc, accErr, SourcePosition.moveRightBy(charPos, 6))
+                    case Result.Err(error) => visit(rest2, d1 :: d2 :: d3 :: d4 :: acc, error :: accErr, SourcePosition.moveRightBy(charPos, 6))
                   }
                 // less than 4 chars were left in the string
                 case rest2 =>
                   val malformedCode = rest2.takeWhile(_ != '\\').mkString("")
                   val err = MalformedUnicodeEscapeSequence(malformedCode, loc)
-                  visit(rest2, malformedCode.toList ++ acc, err :: accErr)
+                  visit(rest2, malformedCode.toList ++ acc, err :: accErr, SourcePosition.moveRightBy(charPos, 6))
               }
-              case c => visit(rest, c :: acc, IllegalEscapeSequence(c, loc) :: accErr)
+              case c => visit(rest, c :: acc, IllegalEscapeSequence(c, loc, SourcePosition.moveRight(charPos)) :: accErr, SourcePosition.moveRightBy(charPos, 2))
             }
           // Case 2: Simple character literal
-          case c :: rest => visit(rest, c :: acc, accErr)
+          case c :: rest => visit(rest, c :: acc, accErr, SourcePosition.moveRightBy(charPos, 1))
         }
       }
 
@@ -2827,13 +2837,16 @@ object Weeder2 {
         }
       }
 
-      visit(str.toList, Nil, Nil)
+      visit(str.toList, Nil, Nil, charPos)
     }
 
     def toChar(token: Token)(implicit sctx: SharedContext): Expr = {
       val loc = token.mkSourceLocation()
       val text = token.text.stripPrefix("\'").stripSuffix("\'")
-      val (processed, errors) = visitChars(text, loc)
+
+      // +1 to account for the leading '\''
+      val (processed, errors) = visitChars(text, loc, SourcePosition.moveRightBy(loc.sp1, 1))
+
       errors.foreach(sctx.errors.add)
       if (processed.length != 1) {
         val error = MalformedChar(processed, loc)
@@ -2847,7 +2860,8 @@ object Weeder2 {
     def toStringCst(token: Token)(implicit sctx: SharedContext): Expr = {
       val loc = token.mkSourceLocation()
       val text = token.text.stripPrefix("\"").stripSuffix("\"")
-      val (processed, errors) = visitChars(text, loc)
+      // +1 to account for the leading '"'
+      val (processed, errors) = visitChars(text, loc, SourcePosition.moveRightBy(loc.sp1, 1))
       errors.foreach(sctx.errors.add)
       Expr.Cst(Constant.Str(processed), loc)
     }
