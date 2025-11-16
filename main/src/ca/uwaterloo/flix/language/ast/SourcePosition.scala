@@ -41,6 +41,13 @@ object SourcePosition {
   }
 
   /**
+    * Returns a new [[SourcePosition]] where the column of `pos` is increased by the specified `n`
+    */
+  def moveRightBy(pos: SourcePosition, n: Int): SourcePosition = {
+    SourcePosition(pos.lineOneIndexed, (pos.colOneIndexed + n).toShort)
+  }
+
+  /**
     * Returns a new [[SourcePosition]] where the column of `pos` is increased by 1.
     *
     * OBS: This new position might not be a real position in the source.
