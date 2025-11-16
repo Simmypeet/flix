@@ -23,6 +23,7 @@ import ca.uwaterloo.flix.language.ast.TypedAst.Root
 import ca.uwaterloo.flix.language.ast.shared.AnchorPosition
 import ca.uwaterloo.flix.language.ast.{Name, SourceLocation, SourcePosition, Symbol}
 import ca.uwaterloo.flix.language.errors.ResolutionError
+import ca.uwaterloo.flix.language.errors.WeederError
 
 /**
   * The CodeActionProvider offers quickfix suggestions.
@@ -58,6 +59,9 @@ object CodeActionProvider {
 
     case ResolutionError.UndefinedType(qn, _, ap, _, loc) if overlaps(range, loc) =>
       mkUseType(qn.ident, uri, ap) ++ mkImportJava(qn, uri, ap)
+
+    case WeederError.IllegalEscapeSequence(char, loc, charPos) if overlaps(range, loc) =>
+      List(mkAddDoubleBackslash(char, uri, charPos))
 
     case _ => Nil
   }
@@ -287,6 +291,33 @@ object CodeActionProvider {
   private def overlaps(range: Range, loc: SourceLocation): Boolean = {
     val range2 = sourceLocation2Range(loc)
     range.overlapsWith(range2)
+  }
+
+  /**
+    * Returns a code action that proposes to add an extra backslash before the
+    * given illegal escape sequence `char`.
+    *
+    * For example, if we have:
+    * {{{
+    * let _ = "x \cup y"
+    * }}}
+    *
+    * then we propose to insert:
+    *
+    * {{{
+    * let _ = "x \\cup y"
+    * }}}
+    */
+  private def mkAddDoubleBackslash(char: Char, uri: String, invalidCharPos: SourcePosition): CodeAction = {
+    val position = Position(invalidCharPos.lineOneIndexed, invalidCharPos.colOneIndexed)
+    val range = Range(position, position)
+
+    CodeAction(
+      title = s"Add an extra backlash before '$char'",
+      kind = CodeActionKind.QuickFix,
+      edit = Some(WorkspaceEdit(Map(uri -> List(TextEdit(range, "\\"))))),
+      command = None
+    )
   }
 
   private def sourcePosition2Position(sourcePosition: SourcePosition): Position = {
