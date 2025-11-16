@@ -19,6 +19,7 @@ package ca.uwaterloo.flix.language.errors
 import ca.uwaterloo.flix.language.ast.{Name, SourceLocation}
 import ca.uwaterloo.flix.language.{CompilationMessage, CompilationMessageKind}
 import ca.uwaterloo.flix.util.Formatter
+import ca.uwaterloo.flix.language.ast.SourcePosition
 
 /**
   * A common super-type for weeding errors.
@@ -356,10 +357,11 @@ object WeederError {
   /**
     * An error raised to indicate an invalid escape sequence.
     *
-    * @param char the invalid escape character.
-    * @param loc  the location where the error occurred.
+    * @param char           the invalid escape character.
+    * @param loc            the location where the error occurred.
+    * @param invalidCharPos the position of the invalid character.
     */
-  case class IllegalEscapeSequence(char: Char, loc: SourceLocation) extends WeederError {
+  case class IllegalEscapeSequence(char: Char, loc: SourceLocation, invalidCharPos: SourcePosition) extends WeederError {
     def summary: String = s"Invalid escape sequence '\\$char'."
 
     def message(formatter: Formatter): String = {
